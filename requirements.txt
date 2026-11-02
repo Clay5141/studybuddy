@@ -1,0 +1,4 @@
+# StudyBuddy dependencies
+# The Web UI server and the mock mode use only the Python standard
+# library; strands-agents is needed for live mode (real agents).
+strands-agents>=1.0

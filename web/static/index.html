@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>学伴 StudyBuddy · 三个 AI 老师陪你学英语</title>
+<style>
+  :root { --tutor:#2563eb; --quiz:#d97706; --coach:#059669; --bg:#f6f7fb; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: "PingFang SC","Microsoft YaHei",system-ui,sans-serif; background:var(--bg); color:#1f2430; }
+  header { background:linear-gradient(90deg,#1e3a8a,#2563eb); color:#fff; padding:18px 24px; }
+  header h1 { margin:0; font-size:22px; }
+  header p { margin:6px 0 0; opacity:.85; font-size:13px; }
+  main { max-width: 980px; margin: 0 auto; padding: 18px; }
+  .agents { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-bottom:16px; }
+  .card { background:#fff; border-radius:12px; padding:14px; border-top:5px solid #ccc; opacity:.55; transition:.3s; }
+  .card.active { opacity:1; box-shadow:0 6px 18px rgba(0,0,0,.10); transform:translateY(-2px); }
+  .card.done { opacity:.9; }
+  .card h3 { margin:0 0 4px; font-size:16px; }
+  .card p { margin:0; font-size:12px; color:#5b6472; line-height:1.5; }
+  .card.tutor { border-color:var(--tutor); } .card.quiz { border-color:var(--quiz); } .card.coach { border-color:var(--coach); }
+  .panel { background:#fff; border-radius:12px; padding:16px; margin-bottom:14px; }
+  label { font-size:13px; color:#5b6472; }
+  input[type=text], select { padding:8px 10px; border:1px solid #d4d9e2; border-radius:8px; font-size:14px; }
+  button { background:#2563eb; color:#fff; border:0; border-radius:8px; padding:9px 18px; font-size:14px; cursor:pointer; }
+  button:disabled { background:#aab3c2; cursor:not-allowed; }
+  button.secondary { background:#fff; color:#2563eb; border:1px solid #2563eb; }
+  .bubble { border-radius:12px; padding:12px 14px; margin:10px 0; white-space:pre-wrap; line-height:1.65; font-size:14px; }
+  .bubble.tutor { background:#eff6ff; border-left:5px solid var(--tutor); }
+  .bubble.quiz  { background:#fffbeb; border-left:5px solid var(--quiz); }
+  .bubble.coach { background:#ecfdf5; border-left:5px solid var(--coach); }
+  .bubble .who { font-weight:700; margin-bottom:4px; }
+  .exercise { border:1px solid #e3e7ef; border-radius:10px; padding:12px; margin:10px 0; }
+  .exercise .q { font-weight:600; margin-bottom:8px; }
+  .exercise label { display:block; margin:4px 0; color:#1f2430; font-size:14px; }
+  .bar { height:10px; background:#e5e7eb; border-radius:5px; overflow:hidden; }
+  .bar > div { height:100%; background:var(--coach); }
+  .wordrow { display:grid; grid-template-columns:110px 1fr 40px; gap:8px; align-items:center; margin:6px 0; font-size:13px; }
+  .muted { color:#5b6472; font-size:12px; }
+  #log:empty::before { content:"点击「开始上课」，三位老师会依次和你见面。"; color:#8a93a3; font-size:14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📚 学伴 StudyBuddy</h1>
+  <p>三个 AI 老师分工陪练：讲解员教你读懂 · 出题官陪你练习 · 教练帮你改错进步 —— 为缺少英语老师的孩子而做</p>
+</header>
+<main>
+  <div class="agents">
+    <div class="card tutor" id="card-Tutor"><h3>🎓 讲解员 Tutor</h3><p>四步教学法：怎么读 → 为什么这样读 → 跟我拼 → 自己练。绝不干读。</p></div>
+    <div class="card quiz" id="card-QuizMaster"><h3>📝 出题官 QuizMaster</h3><p>把课文变成引导式练习，按你的等级和薄弱词出题，难度自适应。</p></div>
+    <div class="card coach" id="card-Coach"><h3>🏅 教练 Coach</h3><p>批改答案、指出错因、记录薄弱点，给鼓励和下一步建议。</p></div>
+  </div>
+
+  <div class="panel">
+    <label>学生名字 <input type="text" id="student" value="xiaoming"></label>
+    <label>选择课文 <select id="lesson"></select></label>
+    <button id="btn-start">开始上课</button>
+    <button id="btn-quiz" class="secondary" disabled>生成练习</button>
+    <span class="muted" id="status"></span>
+  </div>
+
+  <div class="panel"><div id="log"></div><div id="quizbox"></div></div>
+
+  <div class="panel" id="progress-panel" style="display:none">
+    <h3 style="margin-top:0">📈 我的学习档案</h3>
+    <div id="progress"></div>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let sessionId = null, exercises = [];
+
+async function api(path, body) {
+  const res = await fetch(path, body ? {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)} : {});
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+function setCard(agent, cls) {
+  document.querySelectorAll('.card').forEach(c => { if (cls==='active') c.classList.remove('active'); });
+  const card = $('card-' + agent);
+  if (card) { card.classList.add(cls); if (cls==='active') setTimeout(()=>card.classList.replace('active','done'), 1200); }
+}
+function bubble(agent, who, text) {
+  const div = document.createElement('div');
+  div.className = 'bubble ' + (agent === 'Tutor' ? 'tutor' : agent === 'QuizMaster' ? 'quiz' : 'coach');
+  div.innerHTML = '<div class="who"></div><div class="body"></div>';
+  div.querySelector('.who').textContent = who;
+  div.querySelector('.body').textContent = text;
+  $('log').appendChild(div);
+  div.scrollIntoView({behavior:'smooth'});
+}
+
+async function loadLessons() {
+  const {lessons} = await api('/api/lessons');
+  $('lesson').innerHTML = lessons.map(l => `<option value="${l.id}">${l.title}（${l.level} · ${l.word_count} 个生词）</option>`).join('');
+}
+async function refreshProgress() {
+  const p = await api('/api/progress?student=' + encodeURIComponent($('student').value || 'xiaoming'));
+  const words = Object.entries(p.mastery || {});
+  $('progress-panel').style.display = 'block';
+  $('progress').innerHTML =
+    `<p>等级 Lv.${p.level} · 已完成 ${p.sessions} 次练习 · 待巩固的词（掌握度＜2）：${(p.weak_words||[]).join('、') || '无'}</p>` +
+    (words.length ? words.map(([w, m]) =>
+      `<div class="wordrow"><span>${w}</span><div class="bar"><div style="width:${m*20}%"></div></div><span>${m}/5</span></div>`).join('')
+      : '<p class="muted">还没有记录，完成一次练习后这里会长出你的进步条。</p>');
+}
+
+$('btn-start').onclick = async () => {
+  try {
+    $('status').textContent = '讲解员备课中…';
+    const r = await api('/api/session/start', {student: $('student').value || 'xiaoming', lesson_id: $('lesson').value});
+    sessionId = r.session_id;
+    setCard('Tutor', 'active');
+    bubble('Tutor', '🎓 讲解员 Tutor', r.tutor.text);
+    $('btn-quiz').disabled = false;
+    $('status').textContent = '讲解完成，可以生成练习了';
+    refreshProgress();
+  } catch (e) { $('status').textContent = '出错：' + e.message; }
+};
+
+$('btn-quiz').onclick = async () => {
+  try {
+    $('status').textContent = '出题官出题中…';
+    const r = await api('/api/session/quiz', {session_id: sessionId});
+    exercises = r.exercises;
+    setCard('QuizMaster', 'active');
+    bubble('QuizMaster', '📝 出题官 QuizMaster', r.text);
+    $('quizbox').innerHTML = exercises.map(ex => {
+      if (ex.type === 'choice') return `<div class="exercise"><div class="q">${ex.prompt}</div>` +
+        ex.options.map(o => `<label><input type="radio" name="${ex.id}" value="${o.replace(/"/g,'&quot;')}"> ${o}</label>`).join('') + '</div>';
+      if (ex.type === 'repeat') return `<div class="exercise"><div class="q">${ex.prompt}</div><span class="muted">读完后直接提交即可</span></div>`;
+      return `<div class="exercise"><div class="q">${ex.prompt}</div><input type="text" id="ans-${ex.id}" placeholder="在这里输入答案" style="width:100%"></div>`;
+    }).join('') + '<button id="btn-grade">提交给教练批改</button>';
+    $('btn-grade').onclick = grade;
+    $('status').textContent = '做完点「提交给教练批改」';
+  } catch (e) { $('status').textContent = '出错：' + e.message; }
+};
+
+async function grade() {
+  const answers = {};
+  for (const ex of exercises) {
+    if (ex.type === 'choice') {
+      const picked = document.querySelector(`input[name="${ex.id}"]:checked`);
+      answers[ex.id] = picked ? picked.value : '';
+    } else if (ex.type !== 'repeat') {
+      answers[ex.id] = ($('ans-' + ex.id) || {}).value || '';
+    }
+  }
+  try {
+    $('status').textContent = '教练批改中…';
+    const r = await api('/api/session/grade', {session_id: sessionId, answers});
+    setCard('Coach', 'active');
+    bubble('Coach', '🏅 教练 Coach', r.text);
+    $('quizbox').innerHTML = '';
+    $('status').textContent = '批改完成！可以换一课继续，或再来一组练习';
+    refreshProgress();
+  } catch (e) { $('status').textContent = '出错：' + e.message; }
+}
+
+loadLessons(); refreshProgress();
+</script>
+</body>
+</html>
